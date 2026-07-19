@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Secret Shuffle</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='shuffle.css') }}">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Secret Shuffle</h1>
+  </header>
+
+  {% if error %}
+  <section class="card">
+    <div style="color:var(--warn);font-size:16px">{{ error }}</div>
+  </section>
+  {% else %}
+  <section class="card" id="entryCard">
+    <div class="meta" style="margin-bottom:12px">Enter your secret word. No one can see it until the host reveals the list.</div>
+    <div class="row">
+      <input class="grow" id="wordInput" type="text" autocomplete="off" autocapitalize="none"
+             autocorrect="off" spellcheck="false" placeholder="Your secret word…" aria-label="Secret word">
+      <button id="submitBtn">Submit</button>
+    </div>
+    <div id="entryMsg" class="inline-msg" role="alert"></div>
+  </section>
+
+  <section class="card" id="doneCard" style="display:none;text-align:center;padding:36px 20px">
+    <div style="font-size:40px;margin-bottom:12px">✓</div>
+    <div style="color:var(--ok);font-size:20px;font-weight:700;margin-bottom:8px">Your word is in!</div>
+    <div class="meta">Wait for the host to shuffle and read the words aloud.</div>
+  </section>
+  {% endif %}
+
+  <div class="footer">Your word is private until the host chooses to reveal it.</div>
+</div>
+
+{% if not error %}
+<script>
+(function(){
+  const ROOM_ID   = {{ room_id | tojson }};
+  const wordInput = document.getElementById('wordInput');
+  const submitBtn = document.getElementById('submitBtn');
+  const entryMsg  = document.getElementById('entryMsg');
+  const entryCard = document.getElementById('entryCard');
+  const doneCard  = document.getElementById('doneCard');
+
+  const showMsg = (el, text, type) => {
+    el.textContent = text;
+    el.className   = `inline-msg ${type}`;
+    clearTimeout(el._t);
+    el._t = setTimeout(() => { el.className = 'inline-msg'; }, 4000);
+  };
+
+  function submit() {
+    const val = wordInput.value.trim();
+    if (!val) return;
+    submitBtn.disabled = true;
+
+    fetch(`/join/${ROOM_ID}/submit`, {
+      method:  'POST',
+      headers: {'Content-Type': 'application/json'},
+      body:    JSON.stringify({word: val})
+    })
+    .then(r => r.json().then(data => ({ok: r.ok, data})))
+    .then(({ok, data}) => {
+      if (data.ok) {
+        entryCard.style.display = 'none';
+        doneCard.style.display  = 'block';
+      } else {
+        showMsg(entryMsg, data.error || 'Something went wrong.', 'error');
+        submitBtn.disabled = false;
+      }
+    })
+    .catch(() => {
+      showMsg(entryMsg, 'Network error — please try again.', 'error');
+      submitBtn.disabled = false;
+    });
+  }
+
+  submitBtn.onclick = submit;
+  wordInput.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+  wordInput.focus();
+})();
+</script>
+{% endif %}
+</body>
+</html>

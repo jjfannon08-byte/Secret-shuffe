@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Secret Shuffle — Host</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='shuffle.css') }}">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Secret Shuffle</h1>
+    <span class="meta" id="countBadge">0 words</span>
+  </header>
+
+  <!-- 1. Share link -->
+  <section class="card">
+    <div class="meta" style="margin-bottom:8px">Share this link — each person opens it and enters one secret word</div>
+    <div class="link-box" id="linkBox" onclick="copyLink()" title="Tap to copy">{{ join_url }}</div>
+    <div class="row" style="margin-top:10px">
+      <button onclick="copyLink()">Copy Link</button>
+    </div>
+    <div id="copyMsg" class="inline-msg" role="status"></div>
+  </section>
+
+  <!-- 2. Host adds their own word -->
+  <section class="card" id="hostEntryCard">
+    <div class="meta" style="margin-bottom:10px">Add your own secret word</div>
+    <div class="row">
+      <input class="grow" id="hostWordInput" type="text" autocomplete="off" autocapitalize="none"
+             autocorrect="off" spellcheck="false" placeholder="Your secret word…" aria-label="Your secret word">
+      <button id="hostAddBtn">Add Mine</button>
+    </div>
+    <div id="hostEntryMsg" class="inline-msg" role="alert"></div>
+  </section>
+
+  <section class="card" id="hostDoneCard" style="display:none">
+    <div style="color:var(--ok);font-weight:700;font-size:16px">Your word is in! ✓</div>
+    <div class="meta" style="margin-top:4px">Waiting for others to submit…</div>
+  </section>
+
+  <!-- 3. Collection status -->
+  <section class="card">
+    <div class="meta">Words collected so far</div>
+    <div class="count-big" id="countDisplay">0</div>
+    <div id="placeholderChips" class="list"></div>
+  </section>
+
+  <!-- 4. Controls -->
+  <section class="card" id="controlsCard">
+    <div class="row">
+      <button class="warn" id="shuffleBtn" disabled>Shuffle</button>
+      <button class="ok"   id="readBtn"    disabled>Read Aloud</button>
+      <button class="ghost" id="revealBtn" disabled>Reveal List</button>
+      <button class="ghost" id="resetBtn">New Game</button>
+    </div>
+    <div id="controlMsg" class="inline-msg" role="alert"></div>
+    <div class="row" style="margin-top:14px">
+      <div class="grow">
+        <label class="meta" for="voiceSel">Voice</label>
+        <select id="voiceSel" aria-label="Voice"></select>
+      </div>
+      <div>
+        <label class="meta" for="rate">Rate</label>
+        <div class="rate-row">
+          <input type="range" min="0.7" max="1.4" value="1" step="0.05" id="rate" aria-label="Speech rate">
+          <span class="rate-val" id="rateVal">1.0×</span>
+        </div>
+      </div>
+      <div>
+        <label class="meta" for="delay">Delay (s)</label>
+        <input type="number" id="delay" min="0" max="5" step="0.5" value="0.8"
+               aria-label="Delay between words"
+               style="width:90px;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.1);background:#0f1326;color:var(--ink)">
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. Revealed list (hidden until host chooses Reveal) -->
+  <section class="card" id="listCard" style="display:none">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <div class="meta">Shuffled words</div>
+      <button class="ghost" id="hideListBtn">Hide</button>
+    </div>
+    <div id="list" class="list"></div>
+  </section>
+
+  <div class="footer">Words are hidden from you until you choose to reveal them.</div>
+</div>
+
+<script>
+(function(){
+  const ROOM_ID  = {{ room_id | tojson }};
+  const JOIN_URL = {{ join_url | tojson }};
+
+  const countBadge    = document.getElementById('countBadge');
+  const countDisplay  = document.getElementById('countDisplay');
+  const placeholders  = document.getElementById('placeholderChips');
+  const hostEntryCard = document.getElementById('hostEntryCard');
+  const hostDoneCard  = document.getElementById('hostDoneCard');
+  const hostWordInput = document.getElementById('hostWordInput');
+  const hostAddBtn    = document.getElementById('hostAddBtn');
+  const hostEntryMsg  = document.getElementById('hostEntryMsg');
+  const shuffleBtn    = document.getElementById('shuffleBtn');
+  const readBtn       = document.getElementById('readBtn');
+  const revealBtn     = document.getElementById('revealBtn');
+  const resetBtn      = document.getElementById('resetBtn');
+  const listEl        = document.getElementById('list');
+  const listCard      = document.getElementById('listCard');
+  const hideListBtn   = document.getElementById('hideListBtn');
+  const voiceSel      = document.getElementById('voiceSel');
+  const rate          = document.getElementById('rate');
+  const rateVal       = document.getElementById('rateVal');
+  const delay         = document.getElementById('delay');
+  const controlMsg    = document.getElementById('controlMsg');
+  const copyMsg       = document.getElementById('copyMsg');
+
+  let items     = [];
+  let speaking  = false;
+  let activeIdx = -1;
+  let voices    = [];
+  let pollTimer;
+  let knownCount = 0;
+  let locked     = false;
+
+  // --- helpers ---
+  const escapeHtml = s => s.replace(/[&<>"']/g,
+    m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+
+  const showMsg = (el, text, type) => {
+    el.textContent = text;
+    el.className   = `inline-msg ${type}`;
+    clearTimeout(el._t);
+    el._t = setTimeout(() => { el.className = 'inline-msg'; }, 3500);
+  };
+
+  // --- copy link ---
+  // Called synchronously from onclick — required for iOS clipboard access.
+  function copyLink() {
+    try {
+      navigator.clipboard.writeText(JOIN_URL);
+      showMsg(copyMsg, 'Link copied!', 'ok');
+    } catch(e) {
+      showMsg(copyMsg, 'Tap and hold the link above to copy it manually.', 'warn');
+    }
+  }
+  window.copyLink = copyLink;
+
+  // --- host word entry ---
+  function submitHostWord() {
+    const val = hostWordInput.value.trim();
+    if (!val) return;
+    hostAddBtn.disabled = true;
+
+    fetch(`/join/${ROOM_ID}/submit`, {
+      method:  'POST',
+      headers: {'Content-Type': 'application/json'},
+      body:    JSON.stringify({word: val})
+    })
+    .then(r => r.json().then(data => ({ok: r.ok, data})))
+    .then(({data}) => {
+      if (data.ok) {
+        hostEntryCard.style.display = 'none';
+        hostDoneCard.style.display  = 'block';
+      } else {
+        showMsg(hostEntryMsg, data.error || 'Something went wrong.', 'error');
+        hostAddBtn.disabled = false;
+      }
+    })
+    .catch(() => {
+      showMsg(hostEntryMsg, 'Network error — try again.', 'error');
+      hostAddBtn.disabled = false;
+    });
+  }
+  hostAddBtn.onclick = submitHostWord;
+  hostWordInput.addEventListener('keydown', e => { if (e.key === 'Enter') submitHostWord(); });
+
+  // --- polling ---
+  function fetchCount() {
+    fetch(`/host/${ROOM_ID}/words`)
+    .then(r => r.json())
+    .then(data => {
+      if (typeof data.count === 'number' && data.count !== knownCount) {
+        knownCount = data.count;
+        updateCountDisplay(data.count);
+      }
+      if (!data.open) locked = true;
+    })
+    .catch(() => {});
+  }
+
+  function updateCountDisplay(n) {
+    countDisplay.textContent = n;
+    countBadge.textContent   = `${n} ${n === 1 ? 'word' : 'words'}`;
+    shuffleBtn.disabled = (n < 2) || locked;
+
+    placeholders.innerHTML = '';
+    for (let i = 0; i < n; i++) {
+      const chip = document.createElement('div');
+      chip.className = 'chip';
+      chip.innerHTML = `<span style="color:var(--ink-dim)">★ Word ${i + 1}</span>`;
+      placeholders.appendChild(chip);
+    }
+  }
+
+  function startPolling() {
+    fetchCount();
+    pollTimer = setInterval(fetchCount, 2500);
+  }
+  function stopPolling() { clearInterval(pollTimer); }
+
+  // Catch up immediately when host returns to page on iOS (setInterval pauses in background).
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && !locked) fetchCount();
+  });
+
+  // --- voices ---
+  const loadVoices = () => {
+    voices = window.speechSynthesis.getVoices().filter(v => v.lang.startsWith('en') || v.default);
+    voiceSel.innerHTML = voices.map((v, i) =>
+      `<option value="${i}">${v.name}${v.default ? ' (Default)' : ''}</option>`).join('');
+  };
+  if ('speechSynthesis' in window) {
+    loadVoices();
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+  }
+
+  // --- Fisher-Yates shuffle ---
+  const shuffleArr = arr => {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  };
+
+  // --- shuffle button ---
+  shuffleBtn.onclick = () => {
+    shuffleBtn.disabled = true;
+    fetch(`/host/${ROOM_ID}/lock`, {method: 'POST'})
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) {
+        showMsg(controlMsg, data.error, 'error');
+        shuffleBtn.disabled = false;
+        return;
+      }
+      stopPolling();
+      locked   = true;
+      items    = shuffleArr(data.words);
+      readBtn.disabled   = false;
+      revealBtn.disabled = false;
+      showMsg(controlMsg, `${items.length} words shuffled. Tap Read Aloud — or Reveal to peek first.`, 'warn');
+    })
+    .catch(() => {
+      showMsg(controlMsg, 'Network error — try again.', 'error');
+      shuffleBtn.disabled = false;
+    });
+  };
+
+  // --- speech ---
+  const speak = text => new Promise(resolve => {
+    const u = new SpeechSynthesisUtterance(text);
+    const v = voices[Number(voiceSel.value)] || voices.find(x => x.default) || null;
+    if (v) u.voice = v;
+    u.rate   = Number(rate.value) || 1;
+    u.onend  = resolve;
+    u.onerror = resolve;
+    window.speechSynthesis.speak(u);
+  });
+
+  const waitMs = ms => new Promise(r => setTimeout(r, ms));
+
+  // speakQueue is async but speak() is called synchronously in its first iteration
+  // (inside the Promise constructor, before any await), satisfying iOS's user-gesture
+  // requirement for speechSynthesis.speak().
+  const speakQueue = async words => {
+    speaking = true;
+    for (let i = 0; i < words.length; i++) {
+      if (!speaking) break;
+      activeIdx = i;
+      if (listCard.style.display !== 'none') renderList();
+      await speak(words[i]);
+      await waitMs(Math.max(0, Number(delay.value) * 1000));
+    }
+    speaking  = false;
+    activeIdx = -1;
+    if (listCard.style.display !== 'none') renderList();
+    readBtn.textContent = 'Read Aloud';
+  };
+
+  readBtn.onclick = async () => {
+    if (!('speechSynthesis' in window)) {
+      showMsg(controlMsg, 'Text-to-speech is not supported on this browser.', 'error');
+      return;
+    }
+    if (speaking) {
+      speaking = false;
+      window.speechSynthesis.cancel();
+      activeIdx = -1;
+      if (listCard.style.display !== 'none') renderList();
+      readBtn.textContent = 'Read Aloud';
+      return;
+    }
+    readBtn.textContent = 'Stop';
+    await speakQueue(items);
+  };
+
+  // --- reveal list ---
+  const renderList = () => {
+    listEl.innerHTML = '';
+    items.forEach((w, i) => {
+      const row = document.createElement('div');
+      row.className = 'chip' + (i === activeIdx ? ' active' : '');
+      row.innerHTML = `<span>${i + 1}. <strong>${escapeHtml(w)}</strong></span>`;
+      listEl.appendChild(row);
+    });
+  };
+
+  revealBtn.onclick = () => { renderList(); listCard.style.display = 'block'; };
+  hideListBtn.onclick = () => { listCard.style.display = 'none'; };
+
+  // --- new game (reset) ---
+  resetBtn.onclick = () => {
+    const existing = document.getElementById('resetConfirm');
+    if (existing) return;
+    const bar = document.createElement('div');
+    bar.id = 'resetConfirm';
+    bar.style.cssText = 'display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap';
+    bar.innerHTML = `<span class="meta">Start a completely new game with a new link?</span>
+      <button class="warn" id="confirmYes" style="padding:8px 14px;font-size:13px">Yes, new game</button>
+      <button class="ghost" id="confirmNo" style="padding:8px 14px;font-size:13px">Cancel</button>`;
+    document.getElementById('controlsCard').appendChild(bar);
+    bar.querySelector('#confirmYes').onclick = () => {
+      const f = document.createElement('form');
+      f.method = 'POST';
+      f.action = '/new';
+      document.body.appendChild(f);
+      f.submit();
+    };
+    bar.querySelector('#confirmNo').onclick = () => bar.remove();
+  };
+
+  rate.oninput = () => { rateVal.textContent = Number(rate.value).toFixed(1) + '×'; };
+
+  startPolling();
+})();
+</script>
+</body>
+</html>

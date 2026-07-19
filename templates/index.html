@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Secret Shuffle</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='shuffle.css') }}">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Secret Shuffle</h1>
+  </header>
+
+  {% if error %}
+  <section class="card">
+    <div style="color:var(--warn);margin-bottom:16px">{{ error }}</div>
+    <form method="POST" action="/new">
+      <button>Start a New Game</button>
+    </form>
+  </section>
+  {% else %}
+  <section class="card" style="text-align:center;padding:40px 20px">
+    <div style="font-size:52px;margin-bottom:16px">🔀</div>
+    <h2 style="margin:0 0 10px;font-size:22px">Pass the Link, Not the Phone</h2>
+    <p class="meta" style="margin:0 0 28px;max-width:380px;margin-left:auto;margin-right:auto;line-height:1.6">
+      You keep your phone. Share a link in the group chat. Everyone enters one secret word.
+      You shuffle and read them aloud — without seeing them first.
+    </p>
+    <form method="POST" action="/new">
+      <button style="font-size:18px;padding:16px 36px">Start a New Game</button>
+    </form>
+  </section>
+  {% endif %}
+
+  <div class="footer">No data leaves this device.</div>
+</div>
+</body>
+</html>
